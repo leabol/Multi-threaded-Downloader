@@ -35,7 +35,8 @@ cmake --build build --target mdown
 ## 使用方式
 
 ```bash
-./build/mdown [-d <directory>] "<url1>" <file1> ["<url2>" <file2> ...] ```
+./build/mdown [-d <directory>] "<url1>" <file1> ["<url2>" <file2> ...] 
+```
 
 - `-d <directory>`：可选，自定义输出目录（会自动创建）。
 - 默认不指定目录时，文件保存到 `~/download`。
