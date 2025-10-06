@@ -14,6 +14,7 @@ class DownloadManager {
 public:
     void addTask(DownloadTaskPtr task);
     void start();
+    void printError() const;
 
 private:
     void renderProgressLoop();

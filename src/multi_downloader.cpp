@@ -17,7 +17,9 @@ namespace downloader {
 class MultiDownloader::Impl {
 public:
     Impl(std::string url, std::string destination, int thread_count)
-        : url_(std::move(url)), destination_(std::move(destination)), thread_count_(std::max(1, thread_count)) {}
+        : url_(std::move(url)), 
+        destination_(std::move(destination)),
+        thread_count_(std::max(1, thread_count)){}
 
     ~Impl() { resetState(); }
 
@@ -100,8 +102,15 @@ public:
 
     [[nodiscard]] Progress getProgress() const {
         std::lock_guard<std::mutex> lock(state_mutex_);
-        return {url_, destination_, static_cast<std::uint64_t>(total_bytes_), static_cast<std::uint64_t>(downloaded_bytes_), is_running_, has_error_,
-                error_message_};
+        return {
+            url_, 
+            destination_, 
+            static_cast<std::uint64_t>(total_bytes_), 
+            static_cast<std::uint64_t>(downloaded_bytes_), 
+            is_running_, 
+            has_error_,
+            error_message_
+        };
     }
 
     [[nodiscard]] bool isRunning() const {
@@ -170,7 +179,8 @@ private:
 
             curl_off_t length = 0;
             curl_easy_getinfo(curl.get(), CURLINFO_CONTENT_LENGTH_DOWNLOAD_T, &length);
-            meta.content_length = std::max<curl_off_t>(0, length);  //保证不为负数, 如果没有返回length字段的值, 将返回-1
+            //保证不为负数, 如果没有返回length字段的值, 将返回-1
+            meta.content_length = std::max<curl_off_t>(0, length); 
         }
 
         return meta;

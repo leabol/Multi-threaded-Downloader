@@ -186,4 +186,12 @@ void DownloadManager::redrawPanel(const std::string& panel, std::size_t& previou
     previous_lines = current_lines;
 }
 
+void DownloadManager::printError() const{
+    for (const auto& task : tasks_) {
+        const auto progress = task->getProgress();
+        if (progress.has_error) {
+            fmt::print("[ERROR] {}: {}\n", progress.filename, progress.error_message);
+        }
+    }
+}
 } // namespace downloader
