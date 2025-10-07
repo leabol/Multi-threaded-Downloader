@@ -18,13 +18,9 @@ void printUsage(const char* programName) {
     std::cerr << "Each file name will be stored under ~/download by default." << std::endl;
 }
 
-// 使用默认下载路径
-std::filesystem::path resolveDownloadDirectory() {
-    const char* home = std::getenv("HOME");
-    std::filesystem::path base = home && *home ? 
-        std::filesystem::path(home) : std::filesystem::current_path();
-
-    std::filesystem::path target = base / "download";
+// 默认下载路径为当前路径下
+std::filesystem::path defaultDownloadDirectory() {
+    std::filesystem::path target = std::filesystem::current_path();
 
     std::error_code ec;
     std::filesystem::create_directories(target, ec);
@@ -57,7 +53,7 @@ int main(int argc, char** argv) {
                      + download_dir.string() + " - " + ec.message());
             }
         } else {
-            download_dir = resolveDownloadDirectory();
+            download_dir = defaultDownloadDirectory();
         }
 
         if (argc - arg_start < 2 || (argc - arg_start) % 2 != 0) {
