@@ -13,60 +13,77 @@
 
 namespace {
 void printUsage(const char* programName) {
-    std::cerr << "Usage: " << programName 
-    << " [-d <directory>] <url1> <file1> [<url2> <file2> ...]" << std::endl;
-    std::cerr << "Each file name will be stored under ~/download by default." << std::endl;
+    std::cerr << "Usage: " << programName
+              << " [-d <directory>] [-t <threads>] <url1> <file1> [<url2> <file2> ...]"
+              << std::endl;
+    std::cerr << "Options:\n"
+              << "  -d <directory>   Set download directory (default: current directory)\n"
+              << "  -t <threads>     Number of threads per download task (default: 8)\n"
+              << "  -h, --help       Show this message" << std::endl;
 }
-
-// 默认下载路径为当前路径下
-std::filesystem::path defaultDownloadDirectory() {
-    std::filesystem::path target = std::filesystem::current_path();
-
-    std::error_code ec;
-    std::filesystem::create_directories(target, ec);
-    if (ec) {
-        throw std::runtime_error("Failed to create download directory: "
-             + target.string() + " - " + ec.message());
-    }
-
-    return target;
-}
-
 } // namespace
 
 int main(int argc, char** argv) {
     try {
         downloader::detail::ensureCurlInitialized();
-        constexpr int default_threads = 8;   //默认线程数
-        std::filesystem::path download_dir;
-        int arg_start = 1;
+        int threads = 8;      //默认线程数
+        std::filesystem::path download_dir = std::filesystem::current_path();   // 默认下载路径为当前路径下
+        int arg_index = 1;
 
-        //处理处理文件路径, 和参数错误
-        if (argc > 3 && std::string(argv[1]) == "-d") {
-            download_dir = argv[2];
-            arg_start = 3;
+        while (arg_index < argc && argv[arg_index][0] == '-') {
+            const std::string option = argv[arg_index];
 
-            std::error_code ec;
-            std::filesystem::create_directories(download_dir, ec);
-            if (ec) {
-                throw std::runtime_error("Failed to create download directory: "
-                     + download_dir.string() + " - " + ec.message());
+            if (option == "-d") {
+                if (arg_index + 1 >= argc) {
+                    printUsage(argv[0]);
+                    return 1;
+                }
+
+                download_dir = argv[arg_index + 1];
+                std::error_code ec;
+                std::filesystem::create_directories(download_dir, ec);
+                if (ec) {
+                    throw std::runtime_error("Failed to create download directory: "
+                         + download_dir.string() + " - " + ec.message());
+                }
+                arg_index += 2;
+            } else if (option == "-t") {
+                if (arg_index + 1 >= argc) {
+                    printUsage(argv[0]);
+                    return 1;
+                }
+
+                try {
+                    threads = std::stoi(argv[arg_index + 1]);
+                } catch (const std::exception&) {
+                    throw std::runtime_error("Invalid thread count: " + std::string(argv[arg_index + 1]));
+                }
+
+                if (threads <= 0 || threads > 65) {
+                    throw std::runtime_error("Thread count is invalid.");
+                }
+
+                arg_index += 2;
+            } else if (option == "-h" || option == "--help") {
+                printUsage(argv[0]);
+                return 0;
+            } else {
+                printUsage(argv[0]);
+                return 1;
             }
-        } else {
-            download_dir = defaultDownloadDirectory();
         }
 
-        if (argc - arg_start < 2 || (argc - arg_start) % 2 != 0) {
+        if (argc - arg_index < 2 || (argc - arg_index) % 2 != 0) {
             printUsage(argv[0]);
             return 1;
         }
 
         //初始化下载管理器，添加任务
         downloader::DownloadManager manager;
-        for (int i = arg_start; i < argc; i += 2) {
+        for (int i = arg_index; i < argc; i += 2) {
             std::filesystem::path destination = download_dir / argv[i + 1];
             auto downloader_task = std::make_shared<downloader::MultiDownloader>(
-                argv[i], destination.string(), default_threads
+                argv[i], destination.string(), threads
             );
             manager.addTask(std::move(downloader_task));
         }
