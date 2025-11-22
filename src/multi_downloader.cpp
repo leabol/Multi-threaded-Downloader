@@ -1,5 +1,7 @@
 #include "downloader/multi_downloader.hpp"
 
+#include <curl/curl.h>
+
 #include <algorithm>
 #include <cstdio>
 #include <memory>
@@ -8,20 +10,46 @@
 #include <thread>
 #include <utility>
 #include <vector>
+#if defined(_WIN32)
+#include <io.h>
 
-#include <curl/curl.h>
+#include <cstdio>
+#else
 #include <unistd.h>
+#endif
 
 namespace downloader {
 
-class MultiDownloader::Impl {
-public:
-    Impl(std::string url, std::string destination, int thread_count)
-        : url_(std::move(url)), 
-        destination_(std::move(destination)),
-        thread_count_(std::max(1, thread_count)){}
+// portability helpers for file operations used by the downloader
+namespace {
+static inline int portable_ftruncate(FILE* file, curl_off_t length) {
+#if defined(_WIN32)
+    // _chsize_s returns 0 on success
+    return _chsize_s(_fileno(file), static_cast<long long>(length)) == 0 ? 0 : -1;
+#else
+    return ftruncate(fileno(file), length);
+#endif
+}
 
-    ~Impl() { resetState(); }
+static inline int portable_fseeko(FILE* file, curl_off_t offset, int whence) {
+#if defined(_WIN32)
+    return _fseeki64(file, static_cast<__int64>(offset), whence);
+#else
+    return fseeko(file, offset, whence);
+#endif
+}
+}  // namespace
+
+class MultiDownloader::Impl {
+  public:
+    Impl(std::string url, std::string destination, int thread_count)
+        : url_(std::move(url))
+        , destination_(std::move(destination))
+        , thread_count_(std::max(1, thread_count)) {}
+
+    ~Impl() {
+        resetState();
+    }
 
     void start() {
         resetState();
@@ -29,10 +57,10 @@ public:
         {
             std::lock_guard<std::mutex> lock(state_mutex_);
             is_running_ = true;
-            has_error_ = false;
+            has_error_  = false;
             error_message_.clear();
             downloaded_bytes_ = 0;
-            total_bytes_ = 0;
+            total_bytes_      = 0;
         }
 
         file_.reset(std::fopen(destination_.c_str(), "wb+"));
@@ -63,21 +91,22 @@ public:
 
         {
             std::lock_guard<std::mutex> lock(state_mutex_);
-            total_bytes_ = metadata.content_length;
+            total_bytes_      = metadata.content_length;
             downloaded_bytes_ = 0;
         }
 
-        if (ftruncate(fileno(file_.get()), total_bytes_) == -1) {
+        if (portable_ftruncate(file_.get(), total_bytes_) == -1) {
             file_.reset();
             registerError("Cannot resize destination file");
             return;
         }
 
         workers_.reserve(thread_count_);
-        const curl_off_t part_size = std::max<curl_off_t>(1, (total_bytes_ + thread_count_ - 1) / thread_count_);
+        const curl_off_t part_size =
+            std::max<curl_off_t>(1, (total_bytes_ + thread_count_ - 1) / thread_count_);
         for (int i = 0; i < thread_count_; ++i) {
             const curl_off_t start = static_cast<curl_off_t>(i) * part_size;
-            const curl_off_t end = std::min(start + part_size, total_bytes_);
+            const curl_off_t end   = std::min(start + part_size, total_bytes_);
             if (start >= total_bytes_) {
                 break;
             }
@@ -102,15 +131,13 @@ public:
 
     [[nodiscard]] Progress getProgress() const {
         std::lock_guard<std::mutex> lock(state_mutex_);
-        return {
-            url_, 
-            destination_, 
-            static_cast<std::uint64_t>(total_bytes_), 
-            static_cast<std::uint64_t>(downloaded_bytes_), 
-            is_running_, 
-            has_error_,
-            error_message_
-        };
+        return {url_,
+                destination_,
+                static_cast<std::uint64_t>(total_bytes_),
+                static_cast<std::uint64_t>(downloaded_bytes_),
+                is_running_,
+                has_error_,
+                error_message_};
     }
 
     [[nodiscard]] bool isRunning() const {
@@ -123,7 +150,7 @@ public:
         return has_error_;
     }
 
-private:
+  private:
     struct FileDeleter {
         void operator()(FILE* fp) const noexcept {
             if (fp) {
@@ -133,12 +160,12 @@ private:
     };
 
     struct FileMetadata {
-        bool supports_range{false};
+        bool       supports_range{false};
         curl_off_t content_length{0};
     };
 
     struct RangeContext {
-        Impl* owner{nullptr};
+        Impl*      owner{nullptr};
         curl_off_t start{0};
         curl_off_t hasWritten{0};
     };
@@ -147,7 +174,7 @@ private:
         using CurlHandle = std::unique_ptr<CURL, decltype(&curl_easy_cleanup)>;
 
         FileMetadata meta;
-        CurlHandle curl{curl_easy_init(), &curl_easy_cleanup};
+        CurlHandle   curl{curl_easy_init(), &curl_easy_cleanup};
         if (!curl) {
             return meta;
         }
@@ -158,7 +185,9 @@ private:
         curl_easy_setopt(curl.get(), CURLOPT_FOLLOWLOCATION, 1L);
 
         std::string headers;
-        curl_easy_setopt( curl.get(), CURLOPT_WRITEFUNCTION,
+        curl_easy_setopt(
+            curl.get(),
+            CURLOPT_WRITEFUNCTION,
             +[](char* ptr, size_t size, size_t nmemb, std::string* out) -> size_t {
                 if (!out) {
                     return 0;
@@ -179,8 +208,8 @@ private:
 
             curl_off_t length = 0;
             curl_easy_getinfo(curl.get(), CURLINFO_CONTENT_LENGTH_DOWNLOAD_T, &length);
-            //保证不为负数, 如果没有返回length字段的值, 将返回-1
-            meta.content_length = std::max<curl_off_t>(0, length); 
+            // 保证不为负数, 如果没有返回length字段的值, 将返回-1
+            meta.content_length = std::max<curl_off_t>(0, length);
         }
 
         return meta;
@@ -195,7 +224,7 @@ private:
             return;
         }
 
-        RangeContext ctx{this, start, 0};
+        RangeContext      ctx{this, start, 0};
         const std::string range = std::to_string(start) + "-" + std::to_string(end - 1);
 
         curl_easy_setopt(curl.get(), CURLOPT_URL, url_.c_str());
@@ -238,7 +267,6 @@ private:
             registerError(std::string{"curl error: "} + curl_easy_strerror(res), false);
             return;
         }
-
     }
 
     static size_t writeCallback(char* ptr, size_t size, size_t nmemb, void* userdata) {
@@ -247,19 +275,19 @@ private:
             return 0;
         }
 
-        Impl& self = *ctx->owner;
+        Impl&        self  = *ctx->owner;
         const size_t total = size * nmemb;
         if (total == 0) {
             return 0;
         }
 
         std::lock_guard<std::mutex> file_lock(self.file_mutex_);
-        FILE* file = self.file_.get();
+        FILE*                       file = self.file_.get();
         if (!file) {
             return 0;
         }
 
-        if (fseeko(file, ctx->start + ctx->hasWritten, SEEK_SET) != 0) {
+        if (portable_fseeko(file, ctx->start + ctx->hasWritten, SEEK_SET) != 0) {
             self.registerError("Failed to seek output file", false);
             return 0;
         }
@@ -289,9 +317,9 @@ private:
         file_.reset();
 
         std::lock_guard<std::mutex> lock(state_mutex_);
-        total_bytes_ = 0;
+        total_bytes_      = 0;
         downloaded_bytes_ = 0;
-        has_error_ = false;
+        has_error_        = false;
         error_message_.clear();
         is_running_ = false;
     }
@@ -314,18 +342,18 @@ private:
 
     std::string url_;
     std::string destination_;
-    int thread_count_;
+    int         thread_count_;
 
     std::unique_ptr<FILE, FileDeleter> file_{};
-    std::vector<std::thread> workers_;
+    std::vector<std::thread>           workers_;
 
     mutable std::mutex state_mutex_;
     mutable std::mutex file_mutex_;
 
-    curl_off_t total_bytes_{0};
-    curl_off_t downloaded_bytes_{0};
-    bool is_running_{false};
-    bool has_error_{false};
+    curl_off_t  total_bytes_{0};
+    curl_off_t  downloaded_bytes_{0};
+    bool        is_running_{false};
+    bool        has_error_{false};
     std::string error_message_;
 };
 
@@ -334,12 +362,20 @@ MultiDownloader::MultiDownloader(std::string url, std::string destination, int t
 
 MultiDownloader::~MultiDownloader() = default;
 
-void MultiDownloader::start() { impl_->start(); }
+void MultiDownloader::start() {
+    impl_->start();
+}
 
-Progress MultiDownloader::getProgress() const { return impl_->getProgress(); }
+Progress MultiDownloader::getProgress() const {
+    return impl_->getProgress();
+}
 
-bool MultiDownloader::isRunning() const { return impl_->isRunning(); }
+bool MultiDownloader::isRunning() const {
+    return impl_->isRunning();
+}
 
-bool MultiDownloader::hasError() const { return impl_->hasError(); }
+bool MultiDownloader::hasError() const {
+    return impl_->hasError();
+}
 
-} // namespace downloader
+}  // namespace downloader
